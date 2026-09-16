@@ -386,6 +386,14 @@ app.post('/api/telegram/request-approval', validateApiSecret, rateLimit({ maxReq
             console.log(`Invalid verification link for request ${id}`);
             auditLog.write('TELEGRAM_INVALID_LINK', { requestId: id });
         },
+        onLinkVerified: (id) => {
+            console.log(`Verification link approved for request ${id}, awaiting OTP`);
+            auditLog.write('TELEGRAM_LINK_VERIFIED', { requestId: id });
+        },
+        onOtpWrong: (id) => {
+            console.log(`Wrong OTP entered for request ${id}`);
+            auditLog.write('TELEGRAM_WRONG_OTP', { requestId: id });
+        },
         onTimeout: (id) => {
             console.log(`Verification link timeout for request ${id}`);
             auditLog.write('TELEGRAM_TIMEOUT', { requestId: id, method: 'link' });

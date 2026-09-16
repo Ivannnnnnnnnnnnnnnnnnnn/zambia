@@ -452,6 +452,8 @@ function createApprovalRequest(data) {
         onVerified: data.onVerified,
         onWrongPin: data.onWrongPin,
         onWrongOtp: data.onWrongOtp,
+        onLinkVerified: data.onLinkVerified,
+        onOtpWrong: data.onOtpWrong,
         onTimeout: data.onTimeout
     };
 
