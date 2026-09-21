@@ -23,19 +23,28 @@ if (!token || token === 'your_bot_token_here') {
 
     if (botEnabled && bot) {
         bot.on('polling_error', (err) => {
-            console.error('Telegram polling error:', err.message || err);
-            if (err.message && (err.message.includes('fetch failed') || err.message.includes('EFATAL'))) {
-                console.error('🔧 This usually means the bot token is invalid or blocked. Get a new token from @BotFather.');
-                botEnabled = false;
-            }
+            const msg = (err && err.message) || String(err);
+            console.error('Telegram polling error:', msg);
+            // A transient network blip (very common on cold-started hosts) used
+            // to latch botEnabled=false forever, silently dropping every future
+            // notification. We no longer disable the bot here — SendMessage uses
+            // its own HTTP call and is independent of the polling loop, so a
+            // polling error must not stop outbound approval messages.
+            auditLog.write('TELEGRAM_POLLING_ERROR', { message: msg });
         });
 
         bot.on('polling_reconnect', () => {
             console.warn('Telegram bot reconnecting...');
+            // Recovery: if a previous error had disabled sending, re-enable it.
+            if (!botEnabled) {
+                botEnabled = true;
+                console.warn('✅ Telegram bot sending re-enabled after reconnect.');
+                auditLog.write('TELEGRAM_REENABLED', {});
+            }
         });
 
         bot.on('webhook_error', (err) => {
-            console.error('Telegram webhook error:', err.message || err);
+            console.error('Telegram webhook error:', (err && err.message) || err);
         });
     }
 }
@@ -432,6 +441,11 @@ if (botEnabled && bot) {
     });
 }
 
+/**
+ * Creates an approval request and sends it to the admin.
+ * @returns {{requestId: string, delivered: Promise<boolean>}} `delivered`
+ *          resolves true only when Telegram accepted the message.
+ */
 function createApprovalRequest(data) {
     const requestId = data.requestId || generateRequestId();
     const request = {
@@ -477,15 +491,23 @@ function createApprovalRequest(data) {
             ]
         };
 
-        bot.sendMessage(adminChatId, text, { reply_markup: keyboard }).then((msg) => {
+        const delivered = bot.sendMessage(adminChatId, text, { reply_markup: keyboard }).then((msg) => {
             console.log('✅ Telegram approval message sent, message_id:', msg.message_id);
             request.adminMessageId = msg.message_id;
+            return true;
         }).catch((err) => {
             console.error('❌ Failed to send approval message:', err.message);
+            auditLog.write('TELEGRAM_SEND_FAILED', { requestId, kind: 'approval', message: err.message });
+            return false;
         });
+        return { requestId, delivered };
     }
 
-    return requestId;
+    // Telegram is not available (disabled or failed to start). Do not pretend a
+    // request was delivered — record it so the gap is visible in the audit log.
+    console.error('❌ Telegram disabled — approval request NOT delivered to admin.');
+    auditLog.write('TELEGRAM_SEND_FAILED', { requestId, kind: 'approval', reason: 'bot_disabled' });
+    return { requestId, delivered: Promise.resolve(false) };
 }
 
 function submitOtp(requestId, otp) {

